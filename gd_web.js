@@ -98,14 +98,24 @@ Module["expectedDataFileDownloads"]++;
       }
       if (!Module["dataFileDownloads"]) Module["dataFileDownloads"] = {};
       
-      const totalParts = 31; 
+      // Automatically detect how many parts to loop through based on the file name
+      let totalParts = 0;
+      if (packageName.includes("gd_web.wasm")) {
+        totalParts = 10; // part00 to part09
+      } else if (packageName.includes("gd_web.data")) {
+        totalParts = 61; // part00 to part60
+      } else {
+        totalParts = 1;  // fallback for any other files
+      }
+
       const chunks = [];
       let totalLoaded = 0;
       
       Module["setStatus"] && Module["setStatus"]("Downloading split data...");
 
       for (let i = 0; i < totalParts; i++) {
-        const partSuffix = ".part" + String(i).padStart(2, '0');
+        // If it's a single file fallback, don't append a suffix
+        const partSuffix = totalParts > 1 ? (".part" + String(i).padStart(2, '0')) : "";
         const partName = packageName + partSuffix;
 
         try {
@@ -36894,34 +36904,45 @@ function postRun() {
   throw e;
 }
 
-function createExportWrapper(name, nargs) {
-  return (...args) => {
-    assert(runtimeInitialized, `native function \`${name}\` called before runtime initialization`);
-    var f = wasmExports[name];
-    assert(f, `exported native function \`${name}\` not found`);
-    // Only assert for too many arguments. Too few can be valid since the missing arguments will be zero filled.
-    assert(args.length <= nargs, `native function \`${name}\` called with ${args.length} args but expects ${nargs}`);
-    return f(...args);
-  };
-}
+// Define your split part files in order
+var wasmParts = ["gd_web.wasm.part1", "gd_web.wasm.part2", "gd_web.wasm.part3"];
 
-var wasmBinaryFile;
+async function fetchAndCombineWasmParts() {
+  try {
+    // 1. Generate the sequential part names ["gd_web.wasm.01", "gd_web.wasm.02", ..., "gd_web.wasm.09"]
+    var wasmParts = [];
+    for (var i = 1; i <= 9; i++) {
+      var padding = i < 10 ? "0" : "";
+      wasmParts.push("gd_web.wasm." + padding + i);
+    }
 
-function findWasmBinary() {
-  return locateFile("gd_web.wasm");
-}
-
-function getBinarySync(file) {
-  if (file == wasmBinaryFile && wasmBinary) {
-    return new Uint8Array(wasmBinary);
+    // 2. Fetch all 9 chunks in parallel
+    const promises = wasmParts.map(part => 
+      fetch(locateFile(part)).then(res => {
+        if (!res.ok) throw new Error(`Failed to fetch chunk ${part}`);
+        return res.arrayBuffer();
+      })
+    );
+    
+    const buffers = await Promise.all(promises);
+    
+    // 3. Calculate the total size required for the combined WASM binary
+    const totalLength = buffers.reduce((sum, buf) => sum + buf.byteLength, 0);
+    const combinedArray = new Uint8Array(totalLength);
+    
+    // 4. Merge the chunks sequentially into the contiguous array
+    let offset = 0;
+    for (const buf of buffers) {
+      combinedArray.set(new Uint8Array(buf), offset);
+      offset += buf.byteLength;
+    }
+    
+    return combinedArray;
+  } catch (e) {
+    throw "Combining wasm parts failed: " + e.message;
   }
-  if (readBinary) {
-    return readBinary(file);
-  }
-  // Throwing a plain string here, even though it not normally advisable since
-  // this gets turning into an `abort` in instantiateArrayBuffer.
-  throw "both async and sync fetching of the wasm failed";
 }
+
 
 async function getWasmBinary(binaryFile) {
   // If we don't have the binary yet, load it asynchronously using readAsync.
@@ -37036,6 +37057,59 @@ async function createWasm() {
   var exports = receiveInstantiationResult(result);
   return exports;
 }
+
+// 2. Safely declare your custom instantiateWasm hook outside createWasm
+var Module = Module || {};
+
+Module["instantiateWasm"] = function(info, receiveInstance) {
+  // Generate the sequential part filenames ("01" to "09")
+  var wasmParts = [];
+  for (var i = 1; i <= 9; i++) {
+    var padding = i < 10 ? "0" : "";
+    wasmParts.push("gd_web.wasm." + padding + i);
+  }
+
+  // Fetch all 9 chunks asynchronously in parallel
+  var promises = wasmParts.map(function(part) {
+    var currentUrl = window.location.href;
+    var currentFolder = currentUrl.substring(0, currentUrl.lastIndexOf('/') + 1);
+    var targetUrl = (typeof locateFile === 'function') ? locateFile(part) : (currentFolder + part);
+
+    return fetch(targetUrl).then(function(res) {
+      if (!res.ok) throw new Error("Failed to fetch chunk " + part);
+      return res.arrayBuffer();
+    });
+  });
+
+  // Wait for all parts, merge into a contiguous binary, and compile
+  Promise.all(promises).then(function(buffers) {
+    var totalLength = buffers.reduce(function(sum, buf) { return sum + buf.byteLength; }, 0);
+    var combinedArray = new Uint8Array(totalLength);
+    
+    var offset = 0;
+    for (var j = 0; j < buffers.length; j++) {
+      combinedArray.set(new Uint8Array(buffers[j]), offset);
+      offset += buffers[j].byteLength;
+    }
+
+    return WebAssembly.instantiate(combinedArray, info);
+  })
+  .then(function(result) {
+    receiveInstance(result.instance, result.module);
+  })
+  .catch(function(err) {
+    if (typeof error === 'function') {
+      error("Custom chunked WASM instantiation failed: " + err);
+    } else {
+      console.error(err);
+    }
+  });
+
+  return []; // Signals Emscripten that instantiation is asynchronous
+};
+
+// 3. Resumes the rest of the original script structure cleanly
+var wasmExports;
 
 // end include: preamble.js
 // Begin JS library code
