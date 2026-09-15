@@ -97,25 +97,32 @@ Module["expectedDataFileDownloads"]++;
         return new Uint8Array(contents).buffer;
       }
       if (!Module["dataFileDownloads"]) Module["dataFileDownloads"] = {};
-      
-      // Automatically detect how many parts to loop through based on the file name
-      let totalParts = 0;
-      if (packageName.includes("gd_web.wasm")) {
-        totalParts = 10; // part00 to part09
-      } else if (packageName.includes("gd_web.data")) {
-        totalParts = 61; // part00 to part60
-      } else {
-        totalParts = 1;  // fallback for any other files
-      }
 
+      let totalParts = 1;
+      let currentExpectedSize = packageSize;
+
+      if (packageName.includes("gd_web.wasm")) {
+        totalParts = 10;
+        currentExpectedSize = 28000000; 
+      } else if (packageName.includes("gd_web.data")) {
+        totalParts = 61;
+        currentExpectedSize = 318589952; 
+      }
+      
       const chunks = [];
       let totalLoaded = 0;
       
       Module["setStatus"] && Module["setStatus"]("Downloading split data...");
 
       for (let i = 0; i < totalParts; i++) {
-        // If it's a single file fallback, don't append a suffix
-        const partSuffix = totalParts > 1 ? (".part" + String(i).padStart(2, '0')) : "";
+        let partSuffix = "";
+        if (totalParts > 1) {
+          if (packageName.includes("gd_web.wasm")) {
+            partSuffix = "." + String(i).padStart(2, "0"); // points to gd_web.wasm.00
+          } else {
+            partSuffix = ".part" + String(i).padStart(2, "0"); // points to gd_web.data.part00
+          }
+        }
         const partName = packageName + partSuffix;
 
         try {
@@ -133,17 +140,22 @@ Module["expectedDataFileDownloads"]++;
           if (done) break;
           chunks.push(value);
           totalLoaded += value.length;
-          
-          Module["setStatus"] && Module["setStatus"](`Downloading data... (${totalLoaded} bytes loaded)`);
+          Module["dataFileDownloads"][packageName] = { loaded: totalLoaded, total: packageSize };
         }
+
+        const currentPercent = currentExpectedSize ? Math.round((totalLoaded / currentExpectedSize) * 100) : 0;
+        console.log(`[Loader] Finished: ${partName} | Overall Progress: ${currentPercent}% (${totalLoaded}/${currentExpectedSize} bytes)`);
       }
 
-      const packageData = new Uint8Array(chunks.map(c => c.length).reduce((a, b) => a + b, 0));
+      let combinedLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
+      const packageData = new Uint8Array(combinedLength);
+      
       let offset = 0;
       for (const chunk of chunks) {
         packageData.set(chunk, offset);
         offset += chunk.length;
       }
+      
       return packageData.buffer;
     }
     /*async function fetchRemotePackage(packageName, packageSize) {
@@ -37058,57 +37070,8 @@ async function createWasm() {
   return exports;
 }
 
-// 2. Safely declare your custom instantiateWasm hook outside createWasm
-var Module = Module || {};
-
-Module["instantiateWasm"] = function(info, receiveInstance) {
-  // Generate the sequential part filenames ("01" to "09")
-  var wasmParts = [];
-  for (var i = 1; i <= 9; i++) {
-    var padding = i < 10 ? "0" : "";
-    wasmParts.push("gd_web.wasm." + padding + i);
-  }
-
-  // Fetch all 9 chunks asynchronously in parallel
-  var promises = wasmParts.map(function(part) {
-    var currentUrl = window.location.href;
-    var currentFolder = currentUrl.substring(0, currentUrl.lastIndexOf('/') + 1);
-    var targetUrl = (typeof locateFile === 'function') ? locateFile(part) : (currentFolder + part);
-
-    return fetch(targetUrl).then(function(res) {
-      if (!res.ok) throw new Error("Failed to fetch chunk " + part);
-      return res.arrayBuffer();
-    });
-  });
-
-  // Wait for all parts, merge into a contiguous binary, and compile
-  Promise.all(promises).then(function(buffers) {
-    var totalLength = buffers.reduce(function(sum, buf) { return sum + buf.byteLength; }, 0);
-    var combinedArray = new Uint8Array(totalLength);
-    
-    var offset = 0;
-    for (var j = 0; j < buffers.length; j++) {
-      combinedArray.set(new Uint8Array(buffers[j]), offset);
-      offset += buffers[j].byteLength;
-    }
-
-    return WebAssembly.instantiate(combinedArray, info);
-  })
-  .then(function(result) {
-    receiveInstance(result.instance, result.module);
-  })
-  .catch(function(err) {
-    if (typeof error === 'function') {
-      error("Custom chunked WASM instantiation failed: " + err);
-    } else {
-      console.error(err);
-    }
-  });
-
-  return []; // Signals Emscripten that instantiation is asynchronous
-};
-
 // 3. Resumes the rest of the original script structure cleanly
+var wasmBinaryFile = "gd_web.wasm";
 var wasmExports;
 
 // end include: preamble.js
