@@ -4,7 +4,6 @@
     <title>GD WASM - Gpar</title>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
-    <base href="https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/">
     <style>
         html {
             background: #000;
@@ -33,7 +32,7 @@
             left: 0;
             width: 200%;
             height: 108%;
-            background: url("ref/fondo_gd.jpg") repeat-x;
+            background: url("https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/ref/fondo_gd.jpg") repeat-x;
             background-size: 50% 100%;
             filter: blur(12px);
             animation: bgdrift 90s linear infinite;
@@ -298,7 +297,7 @@
 <body>
     <div id="bg"></div>
     <div id="app">
-        <div id="logoDock"><img src="ref/logo.png" alt="logo"></div>
+        <div id="logoDock"><img src="https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/ref/logo.png" alt="logo"></div>
         <div id="stage"><canvas id="canvas" width="1920" height="1080"></canvas></div>
         <div id="midbar">
             <div id="bar">
@@ -365,9 +364,9 @@
         }
     </style>
     <div id="start">
-        <div id="logoFly"><img src="ref/logo.png" alt="logo"></div>
+        <div id="logoFly"><img src="https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/ref/logo.png" alt="logo"></div>
         <div id="buttonContainer">
-            <div id="loadFly" class="load-btn"><img src="ref/load.png" alt="load"></div>
+            <div id="loadFly" class="load-btn"><img src="https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/ref/load.png" alt="load"></div>
             <button id="silentBtn" type="button">Load Privately (No Console)</button>
         </div>
     </div>
@@ -654,7 +653,9 @@
             canvas: document.getElementById('canvas'),
             gdInputQueue: [],
             gdCursorPos: [0, 0],
-            locateFile: function (p) { return p; },
+            locateFile: function (p) {
+                return "https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/" + p;
+            },
             print: function (s) { say(s); },
             printErr: function (s) { say(s); },
             setStatus: function (t) {
