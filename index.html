@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html>
-
 <head>
     <meta charset="utf-8">
-    <title>Geometry Dash WASM</title>
+    <title>GD WASM - Gpar</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
     <base href="https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/">
     <style>
         html {
@@ -201,6 +201,10 @@
             transform: translateY(0);
         }
 
+        #console.hidden-forced {
+            display: none !important;
+        }
+
         #start {
             position: fixed;
             inset: 0;
@@ -301,6 +305,7 @@
                 <div id="fill"></div>
             </div>
             <div id="pct">0%</div>
+            <div id="statusInfo" style="font-size: 12px; font-weight: bold; color: #ffffff; background: rgba(0, 0, 0, 0.75); padding: 3px 10px; border-radius: 5px; border: 1px solid rgba(255, 255, 255, 0.25); box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6); white-space: nowrap;">Starting download...</div>
             <div id="fps"><svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true">
                     <rect x="1.2" y="2" width="13.6" height="9" rx="1.6" fill="none" stroke="#888" stroke-width="1.4" />
                     <rect x="6.5" y="12" width="3" height="2" fill="#888" />
@@ -309,32 +314,141 @@
         </div>
         <div id="console"></div>
     </div>
+    <style>
+        #buttonContainer {
+            margin-bottom: 22vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+        }
+        .load-btn {
+            cursor: pointer;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            transition: transform 1.15s cubic-bezier(.45, 0, .6, 1), opacity 1.15s linear;
+        }
+        .load-btn img {
+            max-height: 110px;
+            max-width: 35vw;
+            width: auto;
+            height: auto;
+            display: block;
+            transition: transform .15s;
+        }
+        .load-btn img:hover {
+            transform: scale(1.08);
+        }
+        .load-btn.down {
+            transform: translateY(32vh) scale(.8);
+            opacity: 0;
+        }
+        #silentBtn {
+            font-family: monospace;
+            font-size: 13px;
+            color: #aaa;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 8px 16px;
+            cursor: pointer;
+            transition: background .2s, color .2s, transform .15s;
+        }
+        #silentBtn:hover {
+            background: #222;
+            color: #fff;
+            transform: scale(1.04);
+        }
+        #silentBtn.down {
+            transform: translateY(32vh) scale(.8);
+            opacity: 0;
+        }
+    </style>
     <div id="start">
         <div id="logoFly"><img src="ref/logo.png" alt="logo"></div>
-        <div id="loadFly"><img src="ref/load.png" alt="load"></div>
+        <div id="buttonContainer">
+            <div id="loadFly" class="load-btn"><img src="ref/load.png" alt="load"></div>
+            <button id="silentBtn" type="button">Load Privately (No Console)</button>
+        </div>
     </div>
-    <script>var consoleEl = document.getElementById('console');
+    <script>
+        var consoleEl = document.getElementById('console');
+        var silentMode = false;
+
+        // Dynamic WASM Fragment Reassembly Utility
+        async function loadSplitWasmBinary() {
+            var wasmParts = [];
+            for (var i = 0; i <= 9; i++) {
+                var padding = i < 10 ? "0" : "";
+                wasmParts.push("gd_web.wasm." + padding + i);
+            }
+
+            var promises = wasmParts.map(function(part) {
+                // Explicitly route requests directly through your production jsDelivr repository layout mapping boundary
+                var cdnBase = "https://cdn.jsdelivr.net/gh/Gpar2023/running_algebra/";
+                var targetUrl = cdnBase + part;
+                
+                return fetch(targetUrl).then(function(res) {
+                    if (!res.ok) throw new Error("Failed to fetch block segment: " + part);
+                    if (Module.setStatus) Module.setStatus(`Downloading WASM: ${part}...`);
+                    return res.arrayBuffer();
+                });
+            });
+
+            var buffers = await Promise.all(promises);
+            var totalLength = buffers.reduce(function(sum, buf) { return sum + buf.byteLength; }, 0);
+            var combinedArray = new Uint8Array(totalLength);
+            
+            var offset = 0;
+            for (var j = 0; j < buffers.length; j++) {
+                combinedArray.set(new Uint8Array(buffers[j]), offset);
+                offset += buffers[j].byteLength;
+            }
+            return combinedArray;
+        }
+
+        async function initLoading(isSilent) {
+            silentMode = isSilent;
+            if (silentMode) {
+                consoleEl.classList.add('hidden-forced');
+            }
+
+            console.log("[Loader] Initiating parallel WebAssembly fragment download...");
+            
+            try {
+                // Fetch and stitch the split .wasm segments before continuing
+                var compiledWasmBuffer = await loadSplitWasmBinary();
+                Module["wasmBinary"] = compiledWasmBuffer;
+                console.log("[Loader] Split WebAssembly compiled successfully. Launching engine loops.");
+            } catch (wasmError) {
+                console.error("[Loader] Critical failure during fragment assembly: " + wasmError);
+                return;
+            }
+            
+            document.getElementById('logoFly').classList.add('up');
+            document.getElementById('loadFly').classList.add('down');
+            document.getElementById('silentBtn').classList.add('down');
+            setTimeout(function() {
+                document.getElementById('start').classList.add('hide');
+                document.getElementById('logoDock').classList.add('in');
+                document.getElementById('stage').classList.add('in');
+                document.getElementById('midbar').classList.add('in');
+                if (!silentMode) document.getElementById('console').classList.add('in');
+            }, 500);
+        }
+
+        document.getElementById('loadFly').addEventListener('click', function() { initLoading(false); gdStart(); });
+        document.getElementById('silentBtn').addEventListener('click', function() { initLoading(true); gdStart(); });
+
         try { Error.stackTraceLimit = 400; } catch (e) { }
         var logQueue = [], logScheduled = false;
         window.gdLogRaw = [];
         var GD_LOG_DOM_MAX = 4000;
         window.gdLogDump = function () { return window.gdLogRaw.join('\n'); };
         function flushLog() {
+            // Disabled DOM node insertion to eliminate layout thrashing and boost frame rates
             logScheduled = false;
-            if (!logQueue.length) return;
-            var frag = document.createDocumentFragment();
-            for (var i = 0; i < logQueue.length; i++) {
-                var line = document.createElement('div');
-                line.textContent = logQueue[i];
-                frag.appendChild(line);
-            }
             logQueue = [];
-            var nearBottom =
-                consoleEl.scrollHeight - consoleEl.scrollTop - consoleEl.clientHeight < 40;
-            consoleEl.appendChild(frag);
-            while (consoleEl.childNodes.length > GD_LOG_DOM_MAX)
-                consoleEl.removeChild(consoleEl.firstChild);
-            if (nearBottom) consoleEl.scrollTop = consoleEl.scrollHeight;
         }
         var seenDep = Object.create(null);
         var QUIET = ['[perf]', '[frame]', '[webgl]', '[io]', '[tex]', '[pngc]',
@@ -358,11 +472,6 @@
             window.gdLogRaw.push(str);
             if (window.gdLogRaw.length > 400000)
                 window.gdLogRaw.splice(0, 100000);
-            logQueue.push(str);
-            if (!logScheduled) {
-                logScheduled = true;
-                requestAnimationFrame(flushLog);
-            }
         }
         var gdProg = 0, gdProgDone = false;
         var fillEl = document.getElementById('fill');
@@ -370,9 +479,25 @@
         function bumpOut() {
             var bar = document.getElementById('bar');
             var pct = document.getElementById('pct');
+            var infoEl = document.getElementById('statusInfo');
             if (bar.classList.contains('bump')) return;
             bar.classList.add('bump');
             pct.classList.add('bump');
+            if (infoEl) {
+                infoEl.style.transition = 'opacity .4s, transform .45s';
+                infoEl.style.opacity = '0';
+                infoEl.style.transform = 'scale(0.8)';
+            }
+            var fps = document.getElementById('fps');
+            fps.animate([{ transform: 'translateX(7px)' },
+            { transform: 'translateX(0)' }],
+                { duration: 260, easing: 'cubic-bezier(.2,.9,.3,1)' });
+            setTimeout(function () {
+                bar.style.display = 'none';
+                pct.style.display = 'none';
+                if (infoEl) infoEl.style.display = 'none';
+            }, 600);
+            return;
             var fps = document.getElementById('fps');
             fps.animate([{ transform: 'translateX(7px)' },
             { transform: 'translateX(0)' }],
@@ -534,12 +659,13 @@
             printErr: function (s) { say(s); },
             setStatus: function (t) {
                 if (!t) return;
+                var infoEl = document.getElementById('statusInfo');
+                if (infoEl) infoEl.textContent = t;
                 var m = /\((\d+)\/(\d+)\)/.exec(t);
                 if (m) {
                     var total = +m[2] || 1;
                     var currentLoaded = +m[1];
                     if (typeof setProgress === 'function') setProgress(currentLoaded / total * 78);
-                    
                     var percent = Math.round((currentLoaded / total) * 100);
                     console.log(`[Loader] Progress: ${percent}% (${currentLoaded}/${total} chunks loaded)`);
                 } else if (t.indexOf('Downloading') === 0) {

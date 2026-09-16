@@ -124,6 +124,8 @@ Module["expectedDataFileDownloads"]++;
           }
         }
         const partName = packageName + partSuffix;
+        const startPercent = currentExpectedSize ? Math.round((totalLoaded / currentExpectedSize) * 100) : 0;
+        if (Module["setStatus"]) Module["setStatus"](`Downloading: ${partName} (${startPercent}%)`);
 
         try {
           var response = await fetch(partName);
@@ -211,7 +213,10 @@ Module["expectedDataFileDownloads"]++;
       // Note that we don't use await here because we want to execute the
       // the rest of this function immediately.
       fetchPromise = fetchRemotePackage(REMOTE_PACKAGE_NAME, REMOTE_PACKAGE_SIZE);
+    } else {
+      fetchPromise = Promise.resolve(fetched);
     }
+    Module["dataPackagePromise"] = fetchPromise;
     async function runWithFS(Module) {
       function assert(check, msg) {
         if (!check) throw new Error(msg);
@@ -36921,14 +36926,17 @@ var wasmParts = ["gd_web.wasm.part1", "gd_web.wasm.part2", "gd_web.wasm.part3"];
 
 async function fetchAndCombineWasmParts() {
   try {
-    // 1. Generate the sequential part names ["gd_web.wasm.01", "gd_web.wasm.02", ..., "gd_web.wasm.09"]
+    if (Module["wasmBinary"]) {
+      return Module["wasmBinary"] instanceof Uint8Array ? Module["wasmBinary"] : new Uint8Array(Module["wasmBinary"]);
+    }
+    // 1. Generate all 10 sequential part names ["gd_web.wasm.00" through "gd_web.wasm.09"]
     var wasmParts = [];
-    for (var i = 1; i <= 9; i++) {
+    for (var i = 0; i <= 9; i++) {
       var padding = i < 10 ? "0" : "";
       wasmParts.push("gd_web.wasm." + padding + i);
     }
 
-    // 2. Fetch all 9 chunks in parallel
+    // 2. Fetch all 10 chunks in parallel
     const promises = wasmParts.map(part => 
       fetch(locateFile(part)).then(res => {
         if (!res.ok) throw new Error(`Failed to fetch chunk ${part}`);
@@ -36951,7 +36959,7 @@ async function fetchAndCombineWasmParts() {
     
     return combinedArray;
   } catch (e) {
-    throw "Combining wasm parts failed: " + e.message;
+    throw new Error("Combining wasm parts failed: " + (e.message || e));
   }
 }
 
@@ -37018,6 +37026,27 @@ function getWasmImports() {
 // Create the wasm instance.
 // Receives the wasm imports, returns the exports.
 async function createWasm() {
+  // Gracefully pause until your button click event populates the binary state array
+  while (!Module["wasmBinary"]) {
+    await new Promise(function(resolve) { setTimeout(resolve, 30); });
+  }
+
+  addRunDependency("wasm-instantiate");
+  var info = getWasmImports();
+  if (Module["wasmBinary"]) {
+
+    console.log("[Loader] Compiling chunked memory buffer array...");
+    var result = await WebAssembly.instantiate(Module["wasmBinary"], info);
+    wasmExports = result.instance.exports;
+    wasmExports = Asyncify.instrumentWasmExports(wasmExports);
+    wasmExports = applySignatureConversions(wasmExports);
+    assignWasmExports(wasmExports);
+    updateMemoryViews();
+    if (typeof runDependencyTracking != "undefined" && runDependencyTracking["wasm-instantiate"]) {
+      removeRunDependency("wasm-instantiate");
+    }
+    return wasmExports;
+  }
   // Load the wasm module and create an instance of using native support in the JS engine.
   // handle a generated wasm instance, receiving its exports and
   // performing other necessary setup
@@ -37065,6 +37094,12 @@ async function createWasm() {
     });
   }
   wasmBinaryFile ??= findWasmBinary();
+  // Directly compile the stitched binary buffer state instead of falling back to default filesystem lookups
+  if (Module["wasmBinary"]) {
+    var result = await WebAssembly.instantiate(Module["wasmBinary"], info);
+    var exports = receiveInstance(result.instance, result.module);
+    return exports;
+  }
   var result = await instantiateAsync(wasmBinary, wasmBinaryFile, info);
   var exports = receiveInstantiationResult(result);
   return exports;
@@ -37073,6 +37108,34 @@ async function createWasm() {
 // 3. Resumes the rest of the original script structure cleanly
 var wasmBinaryFile = "gd_web.wasm";
 var wasmExports;
+
+// Dynamic WASM Fragment Reassembly Utility
+async function loadSplitWasmBinary() {
+  var wasmParts = [];
+  for (var i = 0; i <= 9; i++) {
+    var padding = i < 10 ? "0" : "";
+    wasmParts.push("gd_web.wasm." + padding + i);
+  }
+
+  var promises = wasmParts.map(function(part) {
+    var targetUrl = (typeof locateFile === 'function') ? locateFile(part) : part;
+    return fetch(targetUrl).then(function(res) {
+      if (!res.ok) throw new Error("Failed to fetch block segment: " + part);
+      return res.arrayBuffer();
+    });
+  });
+
+  var buffers = await Promise.all(promises);
+  var totalLength = buffers.reduce(function(sum, buf) { return sum + buf.byteLength; }, 0);
+  var combinedArray = new Uint8Array(totalLength);
+  
+  var offset = 0;
+  for (var j = 0; j < buffers.length; j++) {
+    combinedArray.set(new Uint8Array(buffers[j]), offset);
+    offset += buffers[j].byteLength;
+  }
+  return combinedArray;
+}
 
 // end include: preamble.js
 // Begin JS library code
@@ -43490,6 +43553,12 @@ var wasmMemory = makeInvalidEarlyAccess("wasmMemory");
 
 var wasmTable = makeInvalidEarlyAccess("wasmTable");
 
+function createExportWrapper(name, fixedNumArgs) {
+  return function() {
+    return wasmExports[name].apply(null, arguments);
+  };
+}
+
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
   assert(typeof wasmExports["gd_trace_count"] != "undefined", "missing Wasm export: gd_trace_count");
@@ -43864,8 +43933,31 @@ function checkUnflushedContent() {
 
 var wasmExports;
 
-// With async instantation wasmExports is assigned asynchronously when the
-// instance is received.
-createWasm();
+// Download both WASM & Data chunks, piece them together, and launch the game.
+(async () => {
+  try {
+    console.log("[Loader] Starting WASM & Data chunk assembly...");
+    const [wasmData, packageData] = await Promise.all([
+      fetchAndCombineWasmParts(),
+      Module["dataPackagePromise"]
+    ]);
 
-run();
+    Module["wasmBinary"] = wasmData;
+    Module["packageData"] = packageData;
+
+    console.log(`[Loader] SUCCESS: Both WASM (${wasmData.byteLength} bytes) and Data (${packageData.byteLength} bytes) are fully loaded and pieced together!`);
+    console.log("[Loader] Launching WebAssembly game engine...");
+
+    if (Module["setStatus"]) {
+      Module["setStatus"]("Launching engine...");
+    }
+
+    await createWasm();
+    run();
+  } catch (err) {
+    console.error("[Loader] Error loading or launching:", err);
+    if (Module["setStatus"]) {
+      Module["setStatus"]("Error: " + err.message);
+    }
+  }
+})();
